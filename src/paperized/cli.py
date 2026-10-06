@@ -30,18 +30,33 @@ ASSET_SUFFIXES = ("src/main/resources/assets", "src/generated/resources/assets")
 
 
 def asset_roots(mod: pathlib.Path) -> list[pathlib.Path]:
-    """Every assets directory a mod might use, both source sets.
+    """Every namespace directory whose assets the compile should read.
 
-    Both, because a model in one routinely parents to a model in the other: Farmer's
-    Delight's generated canvas signs all parent to a template in ``main/resources``.
+    Two layouts, both real and both needed:
+
+    * a mod checkout -- ``src/{main,generated}/resources/assets/<namespace>``
+    * a built resource pack -- ``assets/<namespace>`` directly, which is what a server
+      actually has after the generator ran, and the only way to compile a pack that was
+      produced elsewhere
+
+    Both source sets, because a model in one routinely parents to a model in the other:
+    Farmer's Delight's generated canvas signs all parent to a template in ``main/resources``.
     """
     roots: list[pathlib.Path] = []
     for suffix in ASSET_SUFFIXES:
         base = mod / suffix
-        if not base.is_dir():
-            continue
-        roots.extend(sorted(p for p in base.iterdir() if p.is_dir()))
-    return roots
+        if base.is_dir():
+            roots.extend(sorted(p for p in base.iterdir() if p.is_dir()))
+    if roots:
+        return roots
+    if not mod.is_dir():
+        return []
+    # The path is itself one namespace, which is what pointing at .../assets/cinchsmissingblocks
+    # means. Returning nothing here is what made `compile` refuse a perfectly good pack.
+    if (mod / "blockstates").is_dir():
+        return [mod]
+    # Otherwise an assets directory: a namespace is any child holding blockstates.
+    return sorted(p for p in mod.iterdir() if p.is_dir() and (p / "blockstates").is_dir())
 
 
 def census(mod: pathlib.Path, vanilla_models: pathlib.Path | None) -> dict:
@@ -148,7 +163,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     measure.add_argument("--json", action="store_true", help="machine-readable output")
 
+    build = sub.add_parser("compile", help="compile a mod's blocks to cubes, per a policy table")
+    build.add_argument("mod", type=pathlib.Path, help="the mod's root directory")
+    build.add_argument(
+        "--policy",
+        type=pathlib.Path,
+        required=True,
+        help="the caller's collision policy table (see examples/cmb-policy.json)",
+    )
+    build.add_argument("--vanilla-models", type=pathlib.Path, default=None)
+    build.add_argument("--min-side", type=int, default=1, help="smallest placeable cube")
+    build.add_argument("--max-side", type=int, default=256, help="largest placeable cube")
+    build.add_argument("--json", action="store_true")
+
     args = parser.parse_args(argv)
+    if args.command == "compile":
+        return _compile(args)
     if args.command == "measure":
         report = census(args.mod, args.vanilla_models)
         if args.json:
@@ -158,6 +188,40 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     parser.error(f"unknown command {args.command}")
     return 2
+
+
+def _compile(args) -> int:
+    """The whole chain, and the table a server owner argues with."""
+    from .compile import CompileError, PolicyTable, compile_mod, report
+    from .tile import CubeLimits
+
+    roots = asset_roots(args.mod)
+    if not roots:
+        raise SystemExit(f"no assets found under {args.mod}")
+    states_dirs = [r / "blockstates" for r in roots if (r / "blockstates").is_dir()]
+    if not states_dirs:
+        raise SystemExit(f"no blockstates under {args.mod}")
+
+    table = PolicyTable.load(args.policy)
+    limits = CubeLimits(args.min_side, args.max_side)
+    plans = []
+    for states_dir in states_dirs:
+        plans.extend(compile_mod(states_dir, roots, args.vanilla_models, table, limits))
+
+    if args.json:
+        print(json.dumps([
+            {
+                "block": p.id,
+                "policy": p.policy.value if p.policy else None,
+                "matched": p.matched,
+                "note": p.note,
+                **p.totals(),
+            }
+            for p in plans
+        ], indent=2))
+    else:
+        print(report(plans, ", ".join(r.name for r in roots)))
+    return 0
 
 
 def _print_report(report: dict) -> None:

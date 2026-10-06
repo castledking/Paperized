@@ -78,6 +78,15 @@ from .tile import CubeLimits, TilingError, count
 #: The block cell, in model units. A box inside it on an axis stays inside when thickened.
 CELL = (Fraction(0), Fraction(16))
 
+#: Merged regions per box set, and their cube counts per limits.
+#:
+#: Pricing is the expensive half of the pipeline -- a merge plus a tile count per region --
+#: and a mod enumerates far more states than it has distinct shapes: CMB has 21,880 states
+#: and roughly 400 shapes, so the same geometry gets priced about fifty times. Box is a
+#: frozen dataclass, so the key is hashable and the cache is exact rather than approximate.
+_MERGED: dict = {}
+_COUNTED: dict = {}
+
 
 class Policy(enum.Enum):
     NONE = "none"
@@ -213,10 +222,15 @@ def _priced(policy: Policy, geometry: Geometry, limits: CubeLimits, left_out: in
                       refusal="has zero-volume boxes, which no cube covers", left_out=left_out)
     priced: list[tuple[int, int, str, tuple[Box, ...]]] = []
     refusal = None
+    if solid not in _MERGED:
+        _MERGED[solid] = merge(solid)
     # The merged cut first, so it wins a tie: it is the canonical description of the space.
-    for rank, (cut, regions) in enumerate((("merged", merge(solid)), ("as given", solid))):
+    for rank, (cut, regions) in enumerate((("merged", _MERGED[solid]), ("as given", solid))):
         try:
-            priced.append((sum(count(r, limits) for r in regions), rank, cut, regions))
+            key = (regions, limits)
+            if key not in _COUNTED:
+                _COUNTED[key] = sum(count(r, limits) for r in regions)
+            priced.append((_COUNTED[key], rank, cut, regions))
         except TilingError as exc:
             refusal = refusal or str(exc)
     if not priced:

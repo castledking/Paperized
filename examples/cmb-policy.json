@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "A first draft, not an answer. The collision policy is the server owner's decision, so",
+    "this file is that decision written down as data -- and it is deliberately crude.",
+    "",
+    "Rules match on MEASURED GEOMETRY, never a family name. Nothing here knows what a wall",
+    "or a slab is; a wall and a bespoke cross of the same shape get the same treatment.",
+    "Rules are tried in order and the first match wins, so a specific rule goes above a",
+    "broad one.",
+    "",
+    "The two rules here are the two the game's own behaviour suggests. A plate a pixel",
+    "thick is given no collision, which is what Minecraft does with pressure plates and",
+    "why their visual geometry costs 196 cubes. Everything else collides as drawn, which",
+    "is the naive starting point and the thing to argue with: run `paperized compile` and",
+    "the report shows what it costs."
+  ],
+
+  "min_thickness": 2,
+
+  "rules": [
+    { "when": { "max_thickness": 1 }, "policy": "none" },
+    { "when": {}, "policy": "visual" }
+  ],
+
+  "blocks": {},
+  "source": {},
+  "explicit": {}
+}
