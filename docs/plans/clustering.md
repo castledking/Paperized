@@ -1,105 +1,118 @@
 # Clustering — how many geometry families actually exist?
 
-Measured across Farmer's Delight (132 blocks) with CMB (296 blocks) as the second subject.
-This settles the question `family-detection.md` left open: is the family set small enough
-to enumerate, or does the IR need a different primitive?
+Measured across **both** mods now, with the same normaliser
+(`paperized/analysis/geometry.py`) so the two datasets are comparable.
 
-## Three granularities, compared
+## Granularity comparison (FD)
 
-| granularity | distinct values | verdict |
+| granularity | distinct | verdict |
 |---|---|---|
 | property spaces | 17 | too coarse — CMB's wall/fence/pane collide |
-| raw box fingerprints | 23 | too fine — every bespoke block is its own cluster |
-| **capability signatures** | **22** | see below |
+| raw box fingerprints | 23 | too fine — every bespoke block its own cluster |
+| capability signatures | 22 | long tail is genuine |
 
-## The long tail is real, and that is the finding
+## CMB, measured the same way
 
-Coverage by capability signature:
+296 served blocks, 381 blockstates, all resolved. Family × geometry:
+
+| family | n | measured geometry |
+|---|---|---|
+| cube | 61 | `full_cube` |
+| pillar | 13 | `full_cube` |
+| stairs | 64 | 3 boxes |
+| slab | 61 | single box |
+| wall | 75 | **multipart** |
+| fence | 5 | **multipart** |
+| pane | 1 | **multipart** |
+| button | 1 | thin on z |
+| pressure_plate | 1 | single box |
+
+Two results worth having:
+
+**The multipart rejection is rediscovered independently.** Geometry alone flags all 81
+wall/fence/pane blocks as multipart — which is exactly the set
+`tools/carrier_eligibility.py` rejects for carriers. Two unrelated methods agreeing on the
+same 81 blocks is much stronger than either alone, and it means the eligibility gate could
+in principle be derived from geometry rather than reimplemented.
+
+**Pillars measure as `full_cube`.** A pillar is a cube ridden through a rotation
+property, so its collision genuinely is a full cube — the column is narrower than a block
+but the hitbox is not. Worth stating because it looks wrong until you remember a pillar
+must occupy a whole block cell.
+
+## Combined
+
+| | FD | CMB |
+|---|---|---|
+| blocks | 132 | 296 |
+| full cube | 92 | 74 |
+| single short box | 5 | 62 |
+| multi-box | 35 | 64 |
+| thin | — | 1 |
+| multipart (never a carrier) | 2 | 81 |
+
+**The shapes agree, the totals differ, and that is the point.** CMB is dominated by two
+families (slabs and stairs) that happen to be geometrically simple; FD is 70% cubes and
+then a long bespoke tail. Neither is representative, which is the argument for running both.
+
+## The shape is a power law
 
 ```
- 92 / 132   single full-height box      (the cube family: cabinets, crates, signs)
- 12 / 132   two boxes, full height      (cross-shaped crops)
-  5 / 132   one box, 2 tall
-  3 / 132   two boxes, 14 tall
- ...        then a tail of 17 singletons, each 1 block
+ FD:  92 of 132 blocks are ONE geometry.
+      The other 40 are 21 geometries, 17 of them singletons.
+ CMB: 74 of 296 are one geometry; the other 222 are mostly 1- and 3-box.
 ```
 
-**92 blocks are one geometry. The other 40 are 21 distinct geometries.**
+A family list would need ~22 entries for FD alone and every entry after the first two
+would cover exactly one block. That is a lookup table wearing a taxonomy's clothes.
 
-So the shape is a **power law, not a taxonomy**. Two consequences, and they pull in
-opposite directions:
-
-1. A fixed family list would need ~22 entries for FD alone, and every entry after the
-   first two covers exactly one block. That is not a taxonomy, it is a lookup table
-   wearing one.
-2. The long tail is *bespoke geometry* — `apple_pie`, `cooking_pot`, `skillet`. These
-   genuinely have no shared shape, and no amount of inference will find a family for
-   them because there isn't one.
-
-## What this means for the IR
-
-The user's framing was right and the measurement confirms it: **family must not be the
-primitive.** A block should be described by what it *is*:
+## Design consequence: geometry is data, family is interpretation
 
 ```
-collision:
-  boxes: [...]           # measured, normalized, the real primitive
-properties: {...}
-visual: {...}
-capabilities:
-  full_height: true
-  thin: false
-  grounded: true
-  box_count: 2
+mod block ──▶ collision: boxes: [...]      ← the primitive, measured
+              properties: {...}
+              capabilities: {...}           ← derived from boxes
+                    │
+                    ▼
+              runtime strategy              ← furniture + scaled shulkers
 ```
 
-`wall`, `fence`, `pane` then become **recognised profiles** — a collision shape plus a
-connection rule — looked up against those boxes. Not the thing the whole compiler
-depends on.
-
-**Evidence for this from CMB's own generator:** `vanilla_carriers.py` gives wall, fence
+`wall`, `fence`, `pane`, `bespoke` are **profiles over boxes**, not the thing the compiler
+depends on. Corroborated by CMB's own generator: `vanilla_carriers.py` gives wall, fence
 and pane *identical* `used_properties` (`east/north/south/west`, all boolean). Nothing in
-the declared state space separates them. What separates them is the per-family carrier
-spec and the geometry, which is precisely the profile idea.
+the declared state space separates them — only geometry does.
 
-## Abstraction: profile, not family
+The user's refinement is the right vocabulary, and worth adopting explicitly:
 
-```
-  92 blocks → profile "single full box"      → 1 carrier rule, no special case
-  12 blocks → profile "cross-shaped, 2 boxes" → 1 profile
-  40 blocks → 21 bespoke profiles             → each its own geometry, no inference
-```
+> The 17 singleton geometries are **classified geometrically, not taxonomically**.
 
-Three outcomes, and the tail is not a failure of the system:
+`apple_pie` has a box list. That is a complete description. It is not "unclassified" and
+needs no `ApplePieFamily`; `taxonomy: bespoke` is a complete and honest answer. There is no
+failure mode here, and calling it unclassified implies one that does not exist.
 
-- **profile matched** — a known profile covers it.
-- **novel profile** — geometry measured, no profile matches. Emit the boxes as-is.
-  **This is the graceful path, and it is cheap**, because the IR already carries boxes.
-- **ambiguous** — several profiles match; declaration decides.
+## What is next, and what is deliberately not
 
-That third bucket is where the earlier "unclassified" idea belongs, and note that in
-practice it is small: the tail resolves to "novel profile" rather than "cannot tell",
-because a box list is unambiguous even when no family fits it.
-
-## Cost this implies
-
-Decomposing an arbitrary box list into runtime hitboxes is the hard part, and it is
-**already solved** in CMB — walls are three shulkers, fences two, vertical slabs four
-tiled. But those were hand-authored per family, from measurements. Generalising it means:
+Next: **box decomposition** — `boxes → merge into N regions → tile with scaled shulkers`.
+CMB already does this, but hand-authored per family (wall = 3, fence = 2, vertical slab =
+4 tiled). Generalising it is:
 
 ```
-box list → merge into ≤N axis-aligned regions → tile with scaled shulker hitboxes
+resolve inheritance → resolve transforms → extract cuboids → normalise
+    → merge compatible adjacent cuboids → box set → hitbox tiler
 ```
 
-That is a real piece of work with a real failure mode (boxes that do not merge cleanly),
-and it is the next thing to build after the IR. Glass panes are the regression case: they
-are proof the decomposition is not secretly a cube-and-stairs special case.
+Correctness before entity count: "can these 17 boxes become 4 shulkers instead of 7" is an
+optimisation, not the first question. `BoxDecomposer`, `BoxMerger` and `HitboxTiler` as
+separate stages.
 
-## Open questions
+**Glass panes are the permanent regression fixture.** Not because panes are special, but
+because a pane proves the architecture is not secretly cube + stairs + slab + wall + fence.
+If Paperized can take a pane's geometry and independently produce visual, collision,
+placement and runtime representation, it can translate arbitrary geometry rather than a
+fixed vocabulary. That is the capability worth demonstrating.
 
-- Does box-merging hit a wall on geometry that does not decompose into axis-aligned
-  regions? FD's `rope_fence` and `cooking_pot` are the candidates.
-- CMB's geometry has never been measured — `content.json` carries families, not boxes.
-  The clustering is FD-only so far, so "12 clusters → 8 families → 6 runtimes" is
-  **measured for FD and assumed for CMB**. That assumption should be tested before the
-  IR hard-codes anything.
+## Honesty note
+
+FD's numbers are measured. CMB's are measured for the **served** set (296 of 381
+blockstates; the rest are deferred). The two columns are not the same scope, so the
+"combined" row is indicative rather than a strict union.
