@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paperized"
+version = "0.1.0"
+description = "Convert a Minecraft mod's blocks into CraftEngine content, safely"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# PyYAML is the only hard requirement. Everything else is in the standard library:
+# zipfile for reading mod jars, json for manifests, urllib for Mojang's version manifest.
+dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+paperized = "paperized.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
