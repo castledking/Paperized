@@ -115,7 +115,7 @@ def _loader(roots: list[pathlib.Path], vanilla_models: pathlib.Path | None) -> L
     search: list[pathlib.Path] = []
     for root in roots:
         if (root / "block").is_dir():
-            search.append(root)
+            search.append(root / "block")
         elif (root / "models" / "block").is_dir():
             search.append(root / "models" / "block")
         else:
