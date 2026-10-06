@@ -34,6 +34,9 @@ import json
 import pathlib
 from typing import Mapping
 
+from ..blockstate import BlockstateError
+from ..blockstate import placements as blockstate_placements
+from ..compose import CompositionError, compose, rotate
 from ..decompose import GeometryError, Loader, ResolvedModel, _name, decompose, resolve
 from ..ir import Box, Capabilities, FULL_BLOCK, Geometry, Properties, Property
 from .shape import first_model
@@ -90,11 +93,11 @@ def measure_blockstate(
         # A multipart blockstate's geometry is the *union* of its parts. Decomposing part
         # zero and returning it as the block's geometry reports a post as if it were a wall,
         # which is the same lie as inventing a cube for a canvas sign: a partial shape that
-        # looks like a complete one. Composing parts is its own stage, and until it exists
-        # the honest answer is to refuse.
+        # looks like a complete one. Which parts apply depends on the state, so the
+        # composed geometry is measure_state()'s answer, per state.
         raise GeometryError(
-            f"{block}: multipart blockstate has {len(blockstate['multipart'])} parts. "
-            f"Composing them is not implemented; part zero's geometry is not the block's."
+            f"{block}: multipart blockstate has {len(blockstate['multipart'])} parts, so it "
+            f"has no one geometry; measure_state() measures it for a given state."
         )
 
     ref = first_model(blockstate)
@@ -104,6 +107,52 @@ def measure_blockstate(
     resolved = resolve(ref, _loader(mod_model_roots, vanilla_models))
     geometry = decompose(resolved)
     return geometry, properties_from(blockstate), "multipart" in blockstate
+
+
+def measure_state(
+    block: str,
+    blockstate: dict,
+    state: Mapping[str, str],
+    mod_model_roots: list[pathlib.Path],
+    vanilla_models: pathlib.Path | None = None,
+) -> Geometry:
+    """The geometry a blockstate draws for one state: variants or multipart alike.
+
+    The pipeline, one stage per arrow, each stage its own module::
+
+        blockstate, state  ->  placements        (paperized.blockstate)
+        each model         ->  resolve, decompose (paperized.decompose)
+        each geometry      ->  rotate            (paperized.compose)
+        all of them        ->  compose           (paperized.compose)
+
+    The result is the union *as authored*: overlapping and coincident boxes included,
+    nothing merged. Hand it to :func:`paperized.merge.merge` for a region set.
+
+    A random choice of models (a list ``apply``) is accepted only when every choice draws
+    the same geometry once turned -- the usual case, rotated copies of a cube. If they
+    differ, the block has no single shape and this raises rather than picking one.
+    """
+    load = _loader(mod_model_roots, vanilla_models)
+    try:
+        applied = blockstate_placements(blockstate, state)
+    except BlockstateError as exc:
+        raise GeometryError(f"{block} {dict(state)}: {exc}") from exc
+
+    parts: list[Geometry] = []
+    for placement in applied:
+        choices = [rotate(decompose(resolve(m.ref, load)), m.x, m.y) for m in placement.alternatives]
+        shapes = {(c.boxes, c.oriented) for c in choices}
+        if len(shapes) != 1:
+            raise GeometryError(
+                f"{block} {dict(state)}: a random choice between "
+                f"{[m.ref for m in placement.alternatives]} draws {len(shapes)} different "
+                f"shapes, so the block has no single geometry"
+            )
+        parts.append(choices[0])
+    try:
+        return compose(parts)
+    except CompositionError as exc:
+        raise GeometryError(f"{block} {dict(state)}: {exc}") from exc
 
 
 def _loader(roots: list[pathlib.Path], vanilla_models: pathlib.Path | None) -> Loader:
@@ -172,5 +221,6 @@ __all__ = [
     "boxes_from_model",
     "collision_from",
     "measure_blockstate",
+    "measure_state",
     "properties_from",
 ]
