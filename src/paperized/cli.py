@@ -176,7 +176,20 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--max-side", type=int, default=256, help="largest placeable cube")
     build.add_argument("--json", action="store_true")
 
+    pack = sub.add_parser("package", help="write a compiled artifact a backend can read")
+    pack.add_argument("mod", type=pathlib.Path)
+    pack.add_argument("--policy", type=pathlib.Path, required=True)
+    pack.add_argument("--out", type=pathlib.Path, required=True)
+    pack.add_argument("--vanilla-models", type=pathlib.Path, default=None)
+    pack.add_argument("--min-side", type=int, default=1)
+    pack.add_argument("--max-side", type=int, default=256)
+    pack.add_argument("--assets", action="store_true", help="copy the asset tree alongside")
+    pack.add_argument("--no-assets", dest="assets", action="store_false")
+    pack.set_defaults(assets=True)
+
     args = parser.parse_args(argv)
+    if args.command == "package":
+        return _package(args)
     if args.command == "compile":
         return _compile(args)
     if args.command == "measure":
@@ -221,6 +234,40 @@ def _compile(args) -> int:
         ], indent=2))
     else:
         print(report(plans, ", ".join(r.name for r in roots)))
+    return 0
+
+
+def _package(args) -> int:
+    """Compile, then write the package. The artifact is the contract, not this API."""
+    from .artifact import write_package
+    from .compile import PolicyTable, compile_mod
+    from .tile import CubeLimits
+
+    roots = asset_roots(args.mod)
+    if not roots:
+        raise SystemExit(f"no assets found under {args.mod}")
+    states_dirs = [r / "blockstates" for r in roots if (r / "blockstates").is_dir()]
+    if not states_dirs:
+        raise SystemExit(f"no blockstates under {args.mod}")
+
+    table = PolicyTable.load(args.policy)
+    limits = CubeLimits(args.min_side, args.max_side)
+    plans = []
+    for states_dir in states_dirs:
+        # materialise: a package carries cubes, not a count of them.
+        plans.extend(compile_mod(states_dir, roots, args.vanilla_models, table, limits,
+                                 materialise_cubes=True))
+
+    namespace = roots[0].name
+    written = write_package(args.out, plans, namespace,
+                            asset_dirs=roots if args.assets else None)
+    summary = written["manifest"]["summary"]
+    print(f"{args.out}/manifest.json      format={written['manifest']['format']} "
+          f"version={written['manifest']['version']}")
+    print(f"{args.out}/definitions.json  {summary['blocks']} blocks, {summary['states']} states")
+    for status, n in summary["statuses"].items():
+        print(f"  {status:14} {n}")
+    print(f"assets copied  {written['asset_files']} files")
     return 0
 
 

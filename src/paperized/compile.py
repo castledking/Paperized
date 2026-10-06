@@ -71,6 +71,14 @@ class StatePlan:
     offered: tuple[Option, ...]
     chosen: Option | None
     refusal: str | None = None
+    tiled: tuple = ()
+    """The tiled cubes themselves, when the caller asked for them.
+
+    Named ``tiled`` rather than ``cubes`` because :attr:`cubes` is already the count, and a
+    compiled artifact needs the boxes, not the number. Empty when only a price was wanted:
+    re-tiling at serialisation time would let a package disagree with the run that produced
+    it.
+    """
 
     @property
     def cubes(self) -> int | None:
@@ -96,6 +104,28 @@ class BlockPlan:
     """How the table decided: a block id, a rule's index, ``"default"``, or None."""
     note: str | None = None
     """Why nothing was compiled: multipart, no geometry, undecided, or a refusal."""
+
+    @property
+    def policies(self) -> tuple[Policy, ...]:
+        """Every policy its states actually used, in enum order.
+
+        A block can be decided differently per state, because the rules match on measured
+        geometry and geometry varies with the state: FD's stuffed pumpkin is 12 flat states
+        and 8 taller ones, so a thin-things-get-no-collision rule catches half of it.
+
+        Reporting one policy for the whole block, as the last state to be compiled used to,
+        said ``none`` for that block while 8 of its 20 states compiled as ``visual`` at 36
+        cubes -- a report that read as free and cost 36 entities. Hence the set.
+        """
+        # key=lambda p: p.value, not key=Policy.value -- sorted() calls the key with the
+        # element, so passing the descriptor hands it a Policy where it wants self.
+        return tuple(sorted({s.chosen.policy for s in self.states if s.chosen is not None},
+                            key=lambda p: p.value))
+
+    @property
+    def mixed(self) -> bool:
+        """Whether the states of this block were decided differently."""
+        return len(self.policies) > 1
 
     @property
     def undecided(self) -> bool:
@@ -167,7 +197,11 @@ class PolicyTable:
         )
 
     def decide(self, block: str, caps: Capabilities, max_thickness: float | None):
-        """The policy for a block, and how the table decided. ``None`` if it did not."""
+        """The policy for a *state*'s geometry, and how the table decided.
+
+        Per state, not per block: rules match measured geometry, and a block's geometry
+        changes with its state, so a table can legitimately decide one block both ways.
+        """
         named = self.blocks.get(block)
         if named is not None:
             return _policy(named), f"block:{block}"
@@ -212,8 +246,13 @@ def compile_block(
     vanilla: pathlib.Path | None,
     table: PolicyTable,
     limits: CubeLimits,
+    materialise_cubes: bool = False,
 ) -> BlockPlan:
-    """Compile one block across every state its blockstate enumerates."""
+    """Compile one block across every state its blockstate enumerates.
+
+    ``materialise_cubes`` tiles as well as prices. Off by default because a report only needs
+    the number, and tiling 21,880 states is not free.
+    """
     if not table.blocks and not table.rules:
         raise CompileError("policy table decides nothing; every block would be undecided")
 
@@ -248,7 +287,20 @@ def compile_block(
             plans.append(StatePlan(tuple(sorted(state.items())), geometry, caps, offered, None,
                                   refusal=str(exc)))
             continue
-        plans.append(StatePlan(tuple(sorted(state.items())), geometry, caps, offered, chosen))
+        tiled: tuple = ()
+        if materialise_cubes:
+            try:
+                tiled = tuple(tile(chosen.regions, limits))
+            except TilingError as exc:
+                plans.append(StatePlan(tuple(sorted(state.items())), geometry, caps, offered,
+                                      None, refusal=f"priced at {chosen.cubes} but will "
+                                                    f"not tile: {exc}"))
+                continue
+            if len(tiled) != chosen.cubes:
+                raise CompileError(
+                    f"priced at {chosen.cubes}, tiler produced {len(cubes)}")
+        plans.append(StatePlan(tuple(sorted(state.items())), geometry, caps, offered, chosen,
+                              None, tiled))
 
     if not plans:
         return BlockPlan(block, (), None, None, "no states")
@@ -264,12 +316,14 @@ def compile_mod(
     vanilla: pathlib.Path | None,
     table: PolicyTable,
     limits: CubeLimits,
+    materialise_cubes: bool = False,
 ) -> tuple[BlockPlan, ...]:
     """Compile every blockstate in a directory, in name order."""
     plans: list[BlockPlan] = []
     for path in sorted(blockstates.glob("*.json")):
         document = json.loads(path.read_text(encoding="utf-8"))
-        plans.append(compile_block(path.stem, document, roots, vanilla, table, limits))
+        plans.append(compile_block(path.stem, document, roots, vanilla, table, limits,
+                                  materialise_cubes))
     return tuple(plans)
 
 
@@ -298,13 +352,19 @@ def report(plans: Iterable[BlockPlan], namespace: str) -> str:
     ]
     for plan in sorted(plans, key=lambda p: (-(p.cubes or 0), p.id)):
         worst = plan.worst
-        policy = plan.policy.value if plan.policy else (plan.note or "-")
+        if plan.mixed:
+            policy = "+".join(p.value for p in plan.policies)
+        elif plan.policy:
+            policy = plan.policy.value
+        else:
+            policy = plan.note or "-"
         rows.append(
             f"{plan.id.split(':')[-1].ljust(width)}  {policy:9}  "
             f"{len(plan.states):6}  {len(worst.regions) if worst else 0:7}  "
             f"{plan.cubes if plan.cubes is not None else 0:6}  {plan.matched or '-'}"
         )
     decided = [p for p in plans if p.usable]
+    mixed = [p for p in plans if p.mixed]
     undecided = [p for p in plans if p.undecided]
     refused = [p for p in plans if not p.usable and not p.undecided]
     total = sum(p.cubes or 0 for p in decided)
@@ -318,6 +378,10 @@ def report(plans: Iterable[BlockPlan], namespace: str) -> str:
         f"worst single state {worst_overall} cubes; "
         f"{total} cubes summed over every block's worst state"
     )
+    if mixed:
+        rows.append(
+            f"{len(mixed)} block(s) decided differently per state, shown as policy+policy"
+        )
     return "\n".join(rows)
 
 

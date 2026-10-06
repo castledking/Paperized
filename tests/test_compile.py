@@ -33,6 +33,9 @@ VANILLA = pathlib.Path("/tmp/opencode/assets/minecraft/models")
 SHULKER = CubeLimits(1, 256)
 ROOTS = [CMB / "models/block", CMB / "models", VANILLA]
 REPO = pathlib.Path(__file__).resolve().parent.parent
+FD = pathlib.Path("/mnt/storage/devops/FarmersDelight")
+ROOTS_FD = [FD / "src/main/resources/assets/farmersdelight",
+            FD / "src/generated/resources/assets/farmersdelight"]
 
 pytestmark = pytest.mark.skipif(
     not (CMB.exists() and VANILLA.exists()), reason="the real CMB pack is not present"
@@ -51,6 +54,10 @@ def write(tmp_path, document) -> pathlib.Path:
 
 def blockstate(name: str) -> dict:
     return json.loads((CMB / "blockstates" / f"{name}.json").read_text())
+
+
+def blockstate_fd(name: str) -> dict:
+    return json.loads((ROOTS_FD[1] / "blockstates" / f"{name}.json").read_text())
 
 
 #: Compiling all 381 blocks takes about half a minute, and three tests want the same
@@ -269,3 +276,30 @@ def test_the_compiler_names_no_blocks_or_runtimes():
                 continue
             offenders |= {b for b in banned if b in node.value.lower()}
     assert not offenders, f"runtime vocabulary leaked into the compiler: {offenders}"
+
+# --- a block can be decided differently per state -----------------------------
+
+
+def test_a_block_whose_states_disagree_reports_every_policy_it_used():
+    """The report must not summarise a mixed block as one policy.
+
+    FD's stuffed pumpkin is 12 flat states and 8 taller ones, so a rule that gives
+    pixel-thick things no collision catches half the block. Reporting whichever policy the
+    last compiled state used said ``none`` for the block while 8 states compiled as
+    ``visual`` -- a row that read as free and cost 36 entities.
+    """
+    offered = table(rules=(({"max_thickness": 1}, "none", "0"), ({}, "visual", "1")))
+    plan = compile_block("stuffed_pumpkin_block", blockstate_fd("stuffed_pumpkin_block"),
+                         ROOTS_FD, VANILLA, offered, SHULKER)
+    assert plan.mixed, "this fixture is only interesting while its states disagree"
+    assert plan.policies == (Policy.NONE, Policy.VISUAL)
+    assert plan.cubes and plan.cubes > 0, "mixed does not mean free"
+    assert "+" in report((plan,), "demo").splitlines()[2], "the row must show both"
+
+
+def test_a_block_whose_states_agree_reports_one_policy():
+    offered = table(rules=(({}, "visual", "0"),))
+    plan = compile_block("stuffed_pumpkin_block", blockstate_fd("stuffed_pumpkin_block"),
+                         ROOTS_FD, VANILLA, offered, SHULKER)
+    assert not plan.mixed
+    assert plan.policies == (Policy.VISUAL,)

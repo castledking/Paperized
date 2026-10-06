@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Farmer's Delight, same shape of decision as the CMB table.",
+    "",
+    "A pixel-thick thing gets no collision, which is what the game does with plates.",
+    "Everything else collides as drawn, which is the naive starting point and the thing to",
+    "argue with once the report shows what it costs."
+  ],
+  "min_thickness": 2,
+  "rules": [
+    { "when": { "max_thickness": 1 }, "policy": "none" },
+    { "when": {}, "policy": "visual" }
+  ],
+  "blocks": {},
+  "source": {},
+  "explicit": {}
+}
