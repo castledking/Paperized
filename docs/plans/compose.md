@@ -97,12 +97,5 @@ resource root as-is.
 
 ## Next
 
-`HitboxTiler`: regions to placeable cubes. It will take CMB's shulker counts (wall = 3
-stacked cubes per column, vertical slab = 4) as fixtures, not the region counts here. It is
-the first stage that knows a runtime exists, so that is when to settle the Python/Java seam.
-
-Reachability needs deciding before the tiler emits anything. Tiling the 8,208 unreachable
-wall states would ship furniture variants no one can place. Options: a per-block
-reachability rule supplied by the consumer (CMB's plugin already knows which wall shapes it
-picks), or let the tiler run over whatever states the caller asks for and keep enumeration
-out of it. The second keeps the boundary.
+Done: `HitboxTiler`, in [`tile.md`](tile.md). Reachability stayed out of it, and out of the
+geometry pipeline altogether: Paperized enumerates states, and the caller selects them.
