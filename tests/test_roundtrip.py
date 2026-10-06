@@ -23,6 +23,7 @@ from paperized.analysis.geometry import (
     properties_from,
     collision_from,
 )
+from paperized.decompose import GeometryError
 from paperized.ir import Block, BlockGeometry, Geometry, Strategy, derive
 
 CMB = pathlib.Path(
@@ -106,26 +107,24 @@ def test_pillar_visual_and_collision_are_independent():
     assert geometry.visual.source != geometry.collision.source
 
 
-def test_multipart_geometry_survives_the_roundtrip_cmb():
-    """Wall, fence, and pane: multipart sources, never carriers.
+def test_multipart_refuses_rather_than_reporting_part_zero():
+    """A wall is nine parts. Reporting the post as the wall is a plausible-looking lie.
 
-    If multipart were lost in transit, these would measure as empty and look merely
-    unresolved rather than actively unsafe to carry.
+    This is the same failure class as the canvas signs that were fabricated as full cubes:
+    a partial shape presented as a complete one. Decomposing part zero produces a perfectly
+    valid-looking single box, so nothing would flag it -- a wall would measure as its centre
+    post and a fence as its single post.
+
+    Composing parts is a separate, not-yet-implemented stage. Until then this refuses.
     """
-    # No skipping. A guard that quietly `continue`s when a fixture is missing turns a
-    # multipart test into one that asserts almost nothing and still passes -- the same
-    # "green but vacuous" trap as the silent UNKNOWN above.
-    expected = {
-        "andesite_brick_wall",
-        "red_nether_brick_fence",
-        "tinted_glass_pane",
-    }
-    for name in sorted(expected):
+    for name in ("andesite_brick_wall", "red_nether_brick_fence", "tinted_glass_pane"):
         assert (CMB / "blockstates" / f"{name}.json").is_file(), f"missing fixture {name}"
-        visual, props, multipart = cmb_measure(name)
-        assert multipart, f"{name} must be recognised as multipart"
-        assert visual.boxes != (), f"{name} must resolve to real geometry"
-        assert derive(visual, multipart).multi_part
+        state = json.loads((CMB / "blockstates" / f"{name}.json").read_text())
+        parts = len(state["multipart"])
+        assert parts > 1, f"{name} is not multipart; the fixture proves nothing"
+
+        with pytest.raises(GeometryError, match="multipart"):
+            cmb_measure(name)
 
 
 def test_bespoke_box_lists_survive_without_a_family():

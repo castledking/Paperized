@@ -32,43 +32,28 @@ from __future__ import annotations
 
 import json
 import pathlib
+from typing import Mapping
 
+from ..decompose import GeometryError, Loader, ResolvedModel, _name, decompose, resolve
 from ..ir import Box, Capabilities, FULL_BLOCK, Geometry, Properties, Property
-from .shape import Geometry as MeasuredShape
-from .shape import Shape, classify, first_model
+from .shape import first_model
 
 
-def boxes_from_model(shape: MeasuredShape) -> tuple[Box, ...]:
-    """The cuboids a resolved model describes, in 0..16 model space.
+def boxes_from_model(resolved: ResolvedModel) -> tuple[Box, ...]:
+    """Kept as the measurement path's entry point into the decomposer.
 
-    ``INHERITS`` resolves to a full block, since that is what a model with neither elements
-    nor a parent inherits from ``minecraft:block/cube``. ``UNKNOWN`` yields nothing rather
-    than a guess: an empty set has to be reported, a plausible one does not.
+    It used to do its own element->box conversion. It no longer does, and the reason is
+    worth recording: an independent second implementation disagreed with the decomposer on
+    20 of Farmer's Delight's blocks, and on inspection the *decomposer* was right in every
+    case. geometry.py ignored ``rotation``; FD has 35 elements rotated by +-22.5 or +-45
+    degrees, so it reported unrotated boxes for them -- a different shape under the right
+    name, no error.
+
+    A second measurement path is only useful if both are correct. Keeping one that was
+    quietly wrong to cross-check against would have meant two bugs to fix on the next format
+    change and no earlier warning than a test someone had to write on purpose.
     """
-    if shape.shape is Shape.FULL_CUBE:
-        return (FULL_BLOCK,)
-    if shape.shape is Shape.INHERITS:
-        return (FULL_BLOCK,)
-    if shape.shape is Shape.UNKNOWN:
-        return ()
-
-    boxes: list[Box] = []
-    for element in shape.elements:
-        frm, to = element.get("from"), element.get("to")
-        if not frm or not to or len(frm) != 3 or len(to) != 3:
-            continue
-        try:
-            boxes.append(
-                Box(
-                    int(round(frm[0])), int(round(frm[1])), int(round(frm[2])),
-                    int(round(to[0])), int(round(to[1])), int(round(to[2])),
-                )
-            )
-        except (TypeError, ValueError):
-            # A non-numeric element is malformed. Dropping it changes the box count, which
-            # is visible; guessing would not be.
-            continue
-    return tuple(sorted(boxes, key=lambda b: b.as_tuple()))
+    return decompose(resolved).boxes
 
 
 def properties_from(blockstate: dict) -> Properties:
@@ -94,16 +79,62 @@ def measure_blockstate(
 ) -> tuple[Geometry, Properties, bool]:
     """Measure one blockstate. Returns ``(geometry, properties, multipart)``.
 
-    The geometry here is *visual*: what the model chain describes. It is not yet
-    collision. Deciding that is :func:`collision_from`, below.
+    The geometry is *visual*: what the model chain describes. It is not collision, and
+    :func:`collision_from` decides that separately.
+
+    Raises :class:`~paperized.decompose.GeometryError` when a model chain resolves to
+    nothing. It used to return an empty box set instead, and that turned out to hide the
+    single largest measurement error found so far -- see the canvas-sign note below.
     """
-    shape = classify(block, first_model(blockstate), mod_model_roots, vanilla_models)
-    boxes = boxes_from_model(shape)
-    geometry = Geometry(
-        boxes=boxes,
-        source="model:" + (shape.chain[0] if shape.chain else "none"),
-    )
+    if "multipart" in blockstate:
+        # A multipart blockstate's geometry is the *union* of its parts. Decomposing part
+        # zero and returning it as the block's geometry reports a post as if it were a wall,
+        # which is the same lie as inventing a cube for a canvas sign: a partial shape that
+        # looks like a complete one. Composing parts is its own stage, and until it exists
+        # the honest answer is to refuse.
+        raise GeometryError(
+            f"{block}: multipart blockstate has {len(blockstate['multipart'])} parts. "
+            f"Composing them is not implemented; part zero's geometry is not the block's."
+        )
+
+    ref = first_model(blockstate)
+    if ref is None:
+        raise GeometryError(f"{block}: blockstate names no model")
+
+    resolved = resolve(ref, _loader(mod_model_roots, vanilla_models))
+    geometry = decompose(resolved)
     return geometry, properties_from(blockstate), "multipart" in blockstate
+
+
+def _loader(roots: list[pathlib.Path], vanilla_models: pathlib.Path | None) -> Loader:
+    """A model lookup over the mod's roots, falling back to vanilla.
+
+    Vanilla is included because mod models routinely parent into it -- ``orientable`` and
+    friends -- and those answers live in the client jar, not the mod.
+    """
+    search: list[pathlib.Path] = []
+    for root in roots:
+        if (root / "block").is_dir():
+            search.append(root)
+        elif (root / "models" / "block").is_dir():
+            search.append(root / "models" / "block")
+        else:
+            search.append(root)
+    if vanilla_models is not None:
+        search.append(vanilla_models / "block")
+
+    def load(ref: str) -> Mapping | None:
+        name = _name(ref)
+        for root in search:
+            candidate = root / f"{name}.json"
+            if candidate.is_file():
+                try:
+                    return json.loads(candidate.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    return None
+        return None
+
+    return load
 
 
 def collision_from(

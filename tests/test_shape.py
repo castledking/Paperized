@@ -14,6 +14,7 @@ import pytest
 
 from paperized.analysis.shape import Shape, classify, first_model
 from paperized.analysis.geometry import measure_blockstate, properties_from
+from paperized.decompose import GeometryError
 from paperized.ir import Box, Geometry, derive
 
 
@@ -154,15 +155,20 @@ def test_a_thin_plate_is_thin_not_cube():
     assert not caps.full_cube
 
 
-def test_unknown_geometry_yields_no_boxes_and_no_claims(tmp_path, roots):
-    from paperized.analysis.geometry import measure_blockstate, properties_from
+def test_unresolvable_model_raises_instead_of_returning_empty(roots):
+    """A missing model must be loud.
 
-    geom, _, _ = measure_blockstate(
-        "ghost", {"variants": {"a": {"model": "mod:block/gone"}}}, [roots[0]], roots[2]
-    )
-    assert geom.boxes == ()
-    assert not geom.resolved
-    assert not derive(geom).full_cube
+    This used to assert the opposite: that an unresolvable model yields no boxes and claims
+    nothing. Returning an empty geometry was the wrong contract, because empty is
+    indistinguishable downstream from a real shape -- and it hid the largest measurement
+    error found so far, 68 of Farmer's Delight's canvas signs reporting a full cube they do
+    not have.
+    """
+    with pytest.raises(GeometryError) as exc:
+        measure_blockstate(
+            "ghost", {"variants": {"a": {"model": "mod:block/gone"}}}, [roots[0]], roots[2]
+        )
+    assert "mod:block/gone" in str(exc.value)
 
 
 def test_properties_are_read_from_the_variant_key(tmp_path, roots):
@@ -172,8 +178,6 @@ def test_properties_are_read_from_the_variant_key(tmp_path, roots):
 
 
 def test_measure_reports_multipart_and_the_box_set(tmp_path, roots):
-    from paperized.analysis.geometry import measure_blockstate, properties_from
-
     (roots[0] / "crate.json").write_text(
         json.dumps({
             "parent": "minecraft:block/cube",

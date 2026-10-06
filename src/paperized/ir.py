@@ -30,6 +30,8 @@ answer, not a failure to classify.
 
 from __future__ import annotations
 
+import math
+
 import dataclasses
 import enum
 import json
@@ -94,6 +96,43 @@ FULL_BLOCK = Box(0, 0, 0, 16, 16, 16)
 
 
 @dataclasses.dataclass(frozen=True)
+class OrientedBox:
+    """A cuboid that is *not* axis-aligned, kept honestly.
+
+    Added because an axis-aligned box cannot express a rotated one, and the approximation
+    is not a rounding error -- it is a different shape. Farmer's Delight's ``cabbages`` is
+    two thin planes crossed at 45 degrees; both reduce to the same 10x16x10 axis-aligned
+    bounds, so representing them as :class:`Box` reports a nearly solid block where the real
+    geometry is two flat sheets.
+
+    Storing the eight corners instead of a centre/angle/pivot keeps this lossless and makes
+    determinism trivial: the same input always yields the same corners. Right-angle
+    rotations stay integers, because they are exact.
+
+    This is why the decomposer does not "normalise" rotated geometry. A caller that genuinely
+    needs an axis-aligned box -- a runtime collision shape, say -- takes the bounds
+    explicitly, in a later stage, where that decision is visible.
+    """
+
+    corners: tuple[tuple[float, float, float], ...]
+    exact: bool = True
+
+    @property
+    def bounds(self) -> Box:
+        """The axis-aligned box containing this one. A lossy projection, never a substitute."""
+        lo = [min(c[i] for c in self.corners) for i in range(3)]
+        hi = [max(c[i] for c in self.corners) for i in range(3)]
+        return Box(*(math.floor(v + 0.5) if v >= 0 else -math.floor(-v + 0.5)
+                     for v in (*lo, *hi)))
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "corners": [list(c) for c in self.corners],
+            "exact": self.exact,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
 class Geometry:
     """A measured set of cuboids.
 
@@ -105,6 +144,28 @@ class Geometry:
     boxes: tuple[Box, ...] = ()
     source: str = ""
     """Where this came from: a model chain, a carrier, a declaration. For error messages."""
+
+    oriented: tuple[OrientedBox, ...] = ()
+    """Cuboids that are not axis-aligned and therefore cannot live in :attr:`boxes`.
+
+    Present for the geometry that a box list cannot honestly express -- Farmer's Delight's
+    crossed 45-degree crop planes. A geometry with both is fully described; one with only
+    oriented geometry is a shape made entirely of rotated cuboids, and a consumer that needs
+    axis-aligned bounds must project them and accept the loss explicitly.
+    """
+
+    exact: bool = True
+    """False when the boxes are a quantised approximation of the real geometry.
+
+    Set when a source element was rotated by an angle that is not a multiple of 90, or
+    carried fractional coordinates. The rotation is still *applied* -- silently ignoring it
+    would report the unrotated box, which is a different shape wearing the right name --
+    but the result cannot be represented exactly in integer 0..16 space.
+
+    Nothing reads this yet. It exists because an approximation that is not labelled is an
+    approximation that gets trusted, and because the alternative -- a caller comparing two
+    geometries box-for-box -- cannot tell "these differ" from "this was rounded".
+    """
 
     @property
     def resolved(self) -> bool:
@@ -123,8 +184,10 @@ class Geometry:
     def to_json(self) -> dict[str, Any]:
         return {
             "boxes": [b.to_json() for b in self.boxes],
+            "oriented": [o.to_json() for o in self.oriented],
             "source": self.source,
             "resolved": self.resolved,
+            "exact": self.exact,
         }
 
 
