@@ -1,9 +1,13 @@
 <p align="center">
-  <a href="https://github.com/castledking/Paperized"><img alt="CASTLED CODEX" src="https://castled.codes/assets/paperized-banner.png" width="1080" height="258"></a>
-  </a>
+  <img alt="Paperized" width=100% height=auto src="https://castled.codes/assets/paperized-banner.png">
 </p>
 
-# <p align="center">Port mod content to Paper, no client mod</p>
+<p align="center">
+  <a href="https://discord.com/invite/pCKdCX6nYr"><img alt="Discord" src="https://img.shields.io/badge/Discord-Community-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
+  <a href="https://github.com/castledking/Paperized/issues"><img alt="GitHub Issues" src="https://img.shields.io/badge/GitHub-Issues-181717?style=for-the-badge&logo=github"></a>
+  <a href="https://github.com/castledking/Paperized/wiki"><img alt="Wiki" src="https://img.shields.io/badge/GitHub-Wiki-181717?style=for-the-badge&logo=github"></a>
+  <a href="https://castled.codes"><img alt="CASTLED CODEX" src="https://castled.codes/assets/logo-banner.png" width="140" height="35"></a>
+</p>
 
 **Paperized** is a development toolkit for turning a Fabric/NeoForge mod's block content
 into something a Paper server can serve — a CraftEngine pack, plus a machine-readable
