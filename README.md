@@ -1,8 +1,9 @@
 <p align="center">
-  <img alt="Paperized" width=100% height=auto src="https://castled.codes/assets/paperized-banner.png">
+  <a href="https://github.com/castledking/Paperized"><img alt="CASTLED CODEX" src="https://castled.codes/assets/paperized-banner.png" width="1080" height="258"></a>
+  </a>
 </p>
 
-# <p align="center">A toolkit for porting Minecraft mod content to Paper servers, without a client mod</p>
+# <p align="center">Port mod content to Paper, no client mod</p>
 
 **Paperized** is a development toolkit for turning a Fabric/NeoForge mod's block content
 into something a Paper server can serve — a CraftEngine pack, plus a machine-readable
