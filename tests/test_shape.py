@@ -122,3 +122,75 @@ def test_parent_cycle_terminates(tmp_path, roots):
     g = classify("a", "mod:block/a", [main], vanilla)
     assert g.shape is Shape.UNKNOWN
     assert len(g.chain) <= 17
+
+
+# --- geometry normalisation ------------------------------------------------------
+# The bug these guard against: `is_full_cube` compared box_count against a constant
+# without looking at the box, so every slab in CMB measured as a full cube. It looked
+# like correct data, which is what made it survive.
+
+
+def test_single_short_box_is_not_a_full_cube():
+    from paperized.analysis.geometry import Box, capabilities
+
+    caps = capabilities((Box(0, 0, 0, 16, 8, 16),))
+    assert caps.box_count == 1
+    assert caps.is_single_box
+    assert not caps.is_full_cube
+
+
+def test_only_a_true_cube_reports_as_full_cube():
+    from paperized.analysis.geometry import Box, capabilities
+
+    assert capabilities((Box(0, 0, 0, 16, 16, 16),)).is_full_cube
+
+
+def test_a_thin_plate_is_thin_not_cube():
+    from paperized.analysis.geometry import Box, capabilities
+
+    caps = capabilities((Box(0, 0, 0, 16, 16, 2),))
+    assert caps.thin_axis == "z"
+    assert not caps.is_full_cube
+
+
+def test_unknown_geometry_yields_no_boxes_and_no_claims(tmp_path, roots):
+    from paperized.analysis.geometry import measure
+
+    m = measure("ghost", {"variants": {"a": {"model": "mod:block/gone"}}}, [roots[0]], roots[2])
+    assert m.boxes == ()
+    assert not m.resolved
+    assert not m.caps.is_full_cube
+
+
+def test_properties_are_read_from_the_variant_key(tmp_path, roots):
+    from paperized.analysis.geometry import measure, properties_of
+
+    assert properties_of({"variants": {"facing=north,open=true": {"model": "mod:block/a"}}}) == (
+        "facing",
+        "open",
+    )
+
+
+def test_measure_reports_multipart_and_the_box_set(tmp_path, roots):
+    from paperized.analysis.geometry import measure
+
+    (roots[0] / "crate.json").write_text(
+        json.dumps({
+            "parent": "minecraft:block/cube",
+        })
+    )
+    (roots[2] / "block" / "cube.json").write_text(
+        json.dumps({
+            "parent": "block/block",
+            "elements": [{"from": [0, 0, 0], "to": [16, 16, 16]}],
+        })
+    )
+    m = measure(
+        "crate",
+        {"variants": {"facing=north": {"model": "mod:block/crate"}}},
+        [roots[0]],
+        roots[2],
+    )
+    assert m.resolved
+    assert m.caps.is_full_cube
+    assert not m.multipart
