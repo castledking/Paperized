@@ -100,8 +100,6 @@ for that in entities, so it is pinned as a fixture rather than discovered there.
 
 ## Next
 
-The merger has almost nothing to do until multipart blockstates are composed. Today the
-decomposer refuses them (114 of CMB's blockstates and 2 of FD's), and the tests compose
-panes, walls and fences by hand. So multipart composition, a stage of its own, is what
-gives this one real input. After that comes `HitboxTiler`: regions to placeable cubes. That
-is the first stage that knows a runtime exists, and the point to revisit Java.
+Done: multipart composition, in [`compose.md`](compose.md). It gives this stage its real
+input. Across 17,597 composed states of both mods, no reachable state comes back with more
+regions than boxes.
