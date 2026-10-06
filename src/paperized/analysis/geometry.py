@@ -1,107 +1,60 @@
-"""Normalized collision geometry: boxes, plus the capabilities derivable from them.
+"""Measure a mod's blockstates into IR geometry. One path, one set of types.
 
-This is the primitive the rest of the compiler keys on, and the reason is measured rather
-than assumed. Clustering Farmer's Delight's 132 blocks showed the family set is a power
-law, not a taxonomy -- 92 blocks are one geometry, and the remaining 40 are 21 distinct
-geometries of which 17 are singletons. A family list would need an entry per singleton,
-which is a lookup table wearing a taxonomy's clothes.
+This module's whole job is the first arrow of the pipeline:
 
-So a block is described by boxes. "Wall" and "bespoke" are interpretations of boxes, not
-the thing anything depends on.
+    source blockstate + model roots  ──▶  ir.Geometry
 
-Coordinates are normalised to a 0..16 model space and kept as ints where the source is
-integral, because CraftEngine's scaled-shulker hitboxes are placed in exactly this space
-and a float here becomes a sub-tile misalignment that is invisible until someone walks
-into it.
+Everything downstream -- capabilities, families, runtime strategy -- reads what this
+produces. It deliberately produces **IR types directly** rather than a parallel
+representation that something else converts.
+
+That is not tidiness. There were briefly two `Box` types and two `Capabilities` types, one
+set here and one in `ir.py`. The symptom was silent in both cases: a measured visual
+geometry never compared equal to a derived collision geometry, so `differs` reported `True`
+for every block, including ones whose two geometries were byte-identical. Duplicate value
+types break equality quietly, and the only symptom is a field that is always wrong.
+
+The `BoxDecomposer` boundary that follows this module answers "what geometry does this
+resolved model describe?" and nothing else. Deciding whether a box is *collision* is not
+its job -- see `CollisionDerivation` below, and the pillar, whose visual and collision
+legitimately differ.
+
+Traps this module already handles, each of which silently reported every block as
+unmeasurable until fixed:
+
+- models split across `src/main/resources` and `src/generated/resources`
+- `minecraft:block/x` needing its directory stripped, or it looks for `block/block/x.json`
+- a variant value that is a *list* of models, not a dict
+- property names living in the variant *key*, not a nested `properties` object
 """
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import pathlib
 
-from ..ir import Box as _Box
-from .shape import Geometry as _MeasuredShape, Shape, classify, first_model
+from ..ir import Box, Capabilities, FULL_BLOCK, Geometry, Properties, Property
+from .shape import Geometry as MeasuredShape
+from .shape import Shape, classify, first_model
 
 
-# Box lives in the IR and is re-exported here, not redefined.
-#
-# There were briefly two Box types -- this one and paperized.ir.Box -- and the symptom
-# was silent rather than loud: a measured visual geometry never compared equal to a
-# derived collision one, so `differs` was True for every block including ones whose two
-# geometries were identical. Duplicate value types break equality quietly, and the only
-# symptom is a field that is always wrong.
-Box = _Box
+def boxes_from_model(shape: MeasuredShape) -> tuple[Box, ...]:
+    """The cuboids a resolved model describes, in 0..16 model space.
 
-FULL_BLOCK = _Box(0, 0, 0, 16, 16, 16)
-
-
-@dataclasses.dataclass(frozen=True)
-class Capabilities:
-    """What a box set implies, derived rather than declared.
-
-    Every field here is a *measurement*. None of it names a Minecraft family, which is
-    the point: a caller can decide that "thin on one axis and full height" means a pane
-    without this module having an opinion about panes.
-
-    ``full_footprint`` is the measured answer, carried on the record rather than
-    recomputed. It used to be a property that compared ``box_count == 1`` against a
-    constant without looking at the box at all, which reported a bottom slab -- a single
-    0,0,0..16,8,16 box -- as a full cube. Every slab in CMB measured as a cube because
-    of it. Anything that answers "is this a full cube" from a count instead of from the
-    geometry will do this.
+    ``INHERITS`` resolves to a full block, since that is what a model with neither elements
+    nor a parent inherits from ``minecraft:block/cube``. ``UNKNOWN`` yields nothing rather
+    than a guess: an empty set has to be reported, a plausible one does not.
     """
-
-    box_count: int
-    full_height: bool
-    full_footprint: bool
-    """One box filling all of 0..16 on all three axes."""
-    full_width_or_depth: bool
-    thin_axis: str | None
-    """Which axis is thin, or None. A pane is thin on one horizontal axis."""
-    grounded: bool
-    """Touches y=0."""
-    symmetric_y: bool
-    """Mirrors about mid-height. True for most decor, false for ground-planted crops."""
-
-    @property
-    def is_single_box(self) -> bool:
-        return self.box_count == 1
-
-    @property
-    def is_full_cube(self) -> bool:
-        return self.full_footprint
-
-    def to_json(self) -> dict:
-        return {
-            "box_count": self.box_count,
-            "full_footprint": self.full_footprint,
-            "full_height": self.full_height,
-            "thin_axis": self.thin_axis,
-            "grounded": self.grounded,
-            "symmetric_y": self.symmetric_y,
-        }
-
-
-def boxes_from_geometry(geometry: _MeasuredShape) -> tuple[Box, ...]:
-    """The collision boxes a measured geometry implies.
-
-    ``INHERITS`` resolves to a full block, because that is what a model with neither
-    elements nor a parent inherits from ``minecraft:block/cube``. ``UNKNOWN`` yields
-    nothing rather than a guess -- a wrong box is worse than no box, since an empty set
-    has to be reported and a plausible one does not.
-    """
-    if geometry.shape is Shape.FULL_CUBE:
+    if shape.shape is Shape.FULL_CUBE:
         return (FULL_BLOCK,)
-    if geometry.shape is Shape.INHERITS:
+    if shape.shape is Shape.INHERITS:
         return (FULL_BLOCK,)
-    if geometry.shape is Shape.UNKNOWN:
+    if shape.shape is Shape.UNKNOWN:
         return ()
+
     boxes: list[Box] = []
-    for element in geometry.elements:
-        frm = element.get("from")
-        to = element.get("to")
+    for element in shape.elements:
+        frm, to = element.get("from"), element.get("to")
         if not frm or not to or len(frm) != 3 or len(to) != 3:
             continue
         try:
@@ -112,117 +65,81 @@ def boxes_from_geometry(geometry: _MeasuredShape) -> tuple[Box, ...]:
                 )
             )
         except (TypeError, ValueError):
-            # A non-numeric element is malformed. Drop it rather than guess; the count
-            # then differs from the source and the caller can see something is off.
+            # A non-numeric element is malformed. Dropping it changes the box count, which
+            # is visible; guessing would not be.
             continue
     return tuple(sorted(boxes, key=lambda b: b.as_tuple()))
 
 
-def capabilities(boxes: tuple[Box, ...]) -> Capabilities:
-    if not boxes:
-        return Capabilities(0, False, False, False, None, False, False)
-    if len(boxes) == 1 and boxes[0].as_tuple() == FULL_BLOCK.as_tuple():
-        return Capabilities(1, True, True, True, None, True, True)
+def properties_from(blockstate: dict) -> Properties:
+    """The declared state space, read from the variant keys.
 
-    full_height = any(b.y0 <= 0 and b.y1 >= 16 for b in boxes)
-    grounded = any(b.y0 <= 0 for b in boxes)
-
-    min_x = min(b.x0 for b in boxes)
-    max_x = max(b.x1 for b in boxes)
-    min_y = min(b.y0 for b in boxes)
-    max_y = max(b.y1 for b in boxes)
-    min_z = min(b.z0 for b in boxes)
-    max_z = max(b.z1 for b in boxes)
-
-    # "Thin" is relative to the shape's own span, not an absolute 2/16. A cabinet that is
-    # 14 wide and 16 deep is not a pane; a plate that is 16 by 2 is.
-    span_x = max_x - min_x
-    span_z = max_z - min_z
-    threshold = 4
-    thin_x = span_x <= threshold
-    thin_z = span_z <= threshold
-    thin_axis = "x" if thin_x and not thin_z else ("z" if thin_z and not thin_x else None)
-
-    full_width_or_depth = (span_x >= 16 or span_z >= 16) and not (thin_x and thin_z)
-
-    ys = tuple(b.as_tuple()[1::3] for b in boxes)
-    symmetric = all(
-        sorted({b.y0 for b in boxes}) == sorted({16 - b.y1 for b in boxes})
-        for _ in (0,)
-    ) and len({b.y0 for b in boxes}) == len({b.y1 for b in boxes}) or len(boxes) == 1
-
-    return Capabilities(
-        box_count=len(boxes),
-        full_height=full_height,
-        full_footprint=False,
-        full_width_or_depth=full_width_or_depth,
-        thin_axis=thin_axis,
-        grounded=grounded,
-        symmetric_y=bool(symmetric),
-    )
-
-
-@dataclasses.dataclass(frozen=True)
-class Measured:
-    """A block's geometry, measured and normalised. The IR's input."""
-
-    block: str
-    properties: tuple[str, ...]
-    boxes: tuple[Box, ...]
-    caps: Capabilities
-    multipart: bool
-    resolved: bool
-
-    def to_json(self) -> dict:
-        return {
-            "block": self.block,
-            "properties": list(self.properties),
-            "collision": {
-                "boxes": [b.to_json() for b in self.boxes],
-                "box_count": self.caps.box_count,
-            },
-            "capabilities": {
-                "full_height": self.caps.full_height,
-                "thin_axis": self.caps.thin_axis,
-                "grounded": self.caps.grounded,
-                "symmetric_y": self.caps.symmetric_y,
-                "full_width_or_depth": self.caps.full_width_or_depth,
-            },
-            "multipart": self.multipart,
-            "resolved": self.resolved,
-        }
-
-
-def properties_of(blockstate: dict) -> tuple[str, ...]:
-    """Property names, which live in the variant *key*, not a nested object.
-
-    That is the fourth trap from the FD probe: a resolver assuming
-    ``variants[key]["properties"]`` finds nothing on every block. It is right here so the
-    next extractor does not rediscover it.
+    A resolver assuming ``variants[key]["properties"]`` finds nothing on every block.
+    Only *names* are recoverable from a blockstate -- the value sets live in the mod's Java
+    registration, so they are declared, not measured, and default to empty.
     """
     names: set[str] = set()
     for key in blockstate.get("variants") or {}:
         for part in str(key).split(","):
             if "=" in part:
                 names.add(part.split("=", 1)[0].strip())
-    if "multipart" in blockstate:
-        names.add("multipart")
-    return tuple(sorted(names))
+    return Properties(tuple(Property(n, ()) for n in sorted(names)))
 
 
-def measure(
+def measure_blockstate(
     block: str,
     blockstate: dict,
     mod_model_roots: list[pathlib.Path],
     vanilla_models: pathlib.Path | None = None,
-) -> Measured:
-    geometry = classify(block, first_model(blockstate), mod_model_roots, vanilla_models)
-    boxes = boxes_from_geometry(geometry)
-    return Measured(
-        block=block,
-        properties=properties_of(blockstate),
+) -> tuple[Geometry, Properties, bool]:
+    """Measure one blockstate. Returns ``(geometry, properties, multipart)``.
+
+    The geometry here is *visual*: what the model chain describes. It is not yet
+    collision. Deciding that is :func:`collision_from`, below.
+    """
+    shape = classify(block, first_model(blockstate), mod_model_roots, vanilla_models)
+    boxes = boxes_from_model(shape)
+    geometry = Geometry(
         boxes=boxes,
-        caps=capabilities(boxes),
-        multipart="multipart" in blockstate,
-        resolved=geometry.resolved,
+        source="model:" + (shape.chain[0] if shape.chain else "none"),
     )
+    return geometry, properties_from(blockstate), "multipart" in blockstate
+
+
+def collision_from(
+    visual: Geometry,
+    carrier: str | None = None,
+    declared: Geometry | None = None,
+) -> tuple[Geometry, str]:
+    """Decide collision geometry, and record *why*.
+
+    Kept separate from :func:`measure_blockstate` deliberately. The pillar is the proof
+    that this cannot be folded in: its model resolves to a full cube and its carrier is a
+    note block, so both are cubes here -- but for a slab the visual is 16x8x16 and there is
+    no carrier at all, so the two must be allowed to differ.
+
+    Returns ``(collision, source)`` where source is ``'carrier'``, ``'declared'`` or
+    ``'visual'``. Carrying it is what lets a caller tell an intentional difference from an
+    oversight.
+    """
+    if declared is not None:
+        return declared, "declared"
+    if carrier:
+        # A carrier supplies collision by definition; its geometry is the vanilla state's,
+        # which is not something this module measures.
+        return Geometry((FULL_BLOCK,), source="carrier:" + carrier), "carrier"
+    return visual, "visual"
+
+
+__all__ = [
+    "Box",
+    "Capabilities",
+    "FULL_BLOCK",
+    "Geometry",
+    "Properties",
+    "Property",
+    "boxes_from_model",
+    "collision_from",
+    "measure_blockstate",
+    "properties_from",
+]

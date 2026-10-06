@@ -109,7 +109,21 @@ def classify(
         mod_roots = [mod_models]
     else:
         mod_roots = list(mod_models)
-    roots = [(r, "") for r in mod_roots]
+    # Accept either an asset root or a models/block/ directory, because passing the wrong
+    # one used to produce Shape.UNKNOWN for *every* block -- silently, with no error. An
+    # unknown-everything resolver is indistinguishable from a broken one, and the failure
+    # surfaces much later as "these blocks have no geometry".
+    #
+    # Detect by looking for the directory, and fall back to the root itself, so a caller
+    # pointing straight at models/block/ (the documented form) is unaffected.
+    roots = []
+    for r in mod_roots:
+        if (r / "block").is_dir():
+            roots.append((r, ""))
+        elif (r / "models" / "block").is_dir():
+            roots.append((r / "models" / "block", ""))
+        else:
+            roots.append((r, ""))
     if vanilla_models is not None:
         roots.append((vanilla_models / vanilla_block_dir, ""))
 

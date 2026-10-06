@@ -257,8 +257,17 @@ def derive(geometry: Geometry, multi_part: bool = False) -> Capabilities:
 @dataclasses.dataclass(frozen=True)
 class Property:
     name: str
-    values: tuple[str, ...]
+    values: tuple[str, ...] = ()
     default: str | None = None
+
+    @property
+    def measured(self) -> bool:
+        """Whether this property's value set is known.
+
+        Empty ``values`` means "not measured", not "no values" -- a property with no values
+        would not be a property.
+        """
+        return bool(self.values)
 
     @property
     def arity(self) -> int:
@@ -270,7 +279,22 @@ class Property:
 
 @dataclasses.dataclass(frozen=True)
 class Properties:
-    """The state space a block declares."""
+    """The state space a block declares.
+
+    Two different amounts of knowledge, and the difference matters:
+
+    * **names** are recoverable from a blockstate -- they appear in the variant keys.
+    * **value sets** are not. They live in the mod's Java registration, so they are
+      declared rather than measured.
+
+    :attr:`arity` therefore returns ``None`` whenever any value set is unmeasured, rather
+    than guessing. The naive multiplication returns **0** in that case -- because an
+    unknown-sized property multiplies the total to nothing -- and 0 states means "this
+    block needs no carrier at all", which is precisely backwards: a block with three
+    unmeasured properties needs at least as many states as its largest value set.
+
+    A carrier planner must treat ``None`` as "cannot plan yet", not as free.
+    """
 
     properties: tuple[Property, ...] = ()
 
@@ -279,15 +303,29 @@ class Properties:
         return tuple(p.name for p in self.properties)
 
     @property
-    def arity(self) -> int:
-        """Total declared states. The number a carrier has to supply."""
+    def measured(self) -> bool:
+        """Whether every declared property has a known value set."""
+        return all(p.measured for p in self.properties)
+
+    @property
+    def arity(self) -> int | None:
+        """Total declared states, or None when any value set is unknown.
+
+        The number a carrier has to supply. ``None`` means unmeasured, never 0.
+        """
+        if not self.measured:
+            return None
         total = 1
         for p in self.properties:
             total *= p.arity
         return total
 
     def to_json(self) -> dict[str, Any]:
-        return {"properties": [p.to_json() for p in self.properties]}
+        return {
+            "properties": [p.to_json() for p in self.properties],
+            "measured": self.measured,
+            "arity": self.arity,
+        }
 
 
 class Direction(enum.Enum):

@@ -116,15 +116,60 @@ always wrong.
 
 ## Regression fixtures
 
-Before any tiler, these five categories, from both mods:
+`tests/test_roundtrip.py` checks the invariant against **real files from both mods**,
+because a hand-written fixture cannot prove the model chain was walked correctly:
 
-| fixture | from | what it proves |
-|---|---|---|
-| slab | CMB | one box, 16×8×16, **not** a cube |
-| pillar | CMB | visual and collision from different sources |
-| wall / fence / pane | CMB | multipart, never a carrier |
-| apple_pie | FD | bespoke multi-box, no family |
-| cooking_pot / skillet | FD | partial geometry, thin on one axis |
+| fixture | from | boxes | what it proves |
+|---|---|---|---|
+| `andesite_brick_slab` | CMB | 1, `0,0,0 → 16,8,16` | a slab is not a cube, even at one box |
+| `andesite_brick_pillar` | CMB | 1, full | visual and collision are separate fields |
+| `andesite_brick_stairs` | CMB | 3 | multi-box partial geometry |
+| `andesite_brick_wall` | CMB | 1, multipart | multipart is never a carrier |
+| `red_nether_brick_fence` | CMB | — | multipart |
+| `tinted_glass_pane` | CMB | — | multipart |
+| `apple_pie` | FD | 1, `2,0,2 → 14,4,14` | bespoke, no family invented |
+| `cooking_pot` | FD | 8 | bespoke multi-box |
+| `skillet` | FD | 6 | bespoke multi-box |
 
 Glass panes stay the permanent one: a pane proves the architecture is not secretly
 cube + stairs + slab + wall + fence.
+
+## Three bugs this file found
+
+Written after the pipeline was wired, these each failed on first run against real files:
+
+1. **`arity` returned 0 for unmeasured properties.** Names come from variant keys; value
+   sets live in the mod's Java registration. Multiplying by an unknown-sized set yields 0,
+   and 0 states reads as "needs no carrier" — the exact inverse of the truth. `arity` now
+   returns `None` for unmeasured, and `None` is never 0.
+2. **Passing an asset root instead of `models/block/` silently returned UNKNOWN for every
+   block.** The same failure the module docstring already warns about for split roots,
+   reintroduced through a different door. Root detection now inspects the directory.
+3. **The multipart fixture was skipping two of three blocks.** A `continue` guard on a
+   missing fixture makes a test assert nothing and still pass. Fence and pane are named
+   explicitly now, and a missing fixture fails loudly.
+
+Each one produced plausible output rather than a traceback. That is the common shape of
+the bugs worth catching, and the reason the invariant is a test rather than a convention.
+
+## What the fixtures prove about the boundary
+
+`measure_blockstate` stops at geometry. It does not choose a carrier, name a family, or
+mention CraftEngine — asserted in
+`test_measurement_does_not_decide_carriers_or_families`, because the temptation to grow
+that boundary is exactly how this becomes a lookup table.
+
+`collision_from` is separate and takes a carrier **given to it**. The pillar is why it
+cannot be folded in: visual and collision are equal *by value* there and must still be
+equal *by construction* nowhere else.
+
+## BoxDecomposer's contract, now that the input is fixed
+
+```
+resolved model  ──▶  BoxDecomposer  ──▶  VisualGeometry
+```
+
+It answers one question: *what geometry does this resolved model describe?* It knows
+nothing about CMB, Farmer's Delight, stairs, slabs, walls, CraftEngine, shulkers, or
+carriers — and `CollisionDerivation` is a later, separate step, precisely so the pillar
+cannot be collapsed into one.
