@@ -21,40 +21,20 @@ import dataclasses
 import json
 import pathlib
 
-from .shape import Geometry, Shape, classify, first_model
+from ..ir import Box as _Box
+from .shape import Geometry as _MeasuredShape, Shape, classify, first_model
 
 
-@dataclasses.dataclass(frozen=True)
-class Box:
-    """One axis-aligned cuboid, normalised to 0..16."""
+# Box lives in the IR and is re-exported here, not redefined.
+#
+# There were briefly two Box types -- this one and paperized.ir.Box -- and the symptom
+# was silent rather than loud: a measured visual geometry never compared equal to a
+# derived collision one, so `differs` was True for every block including ones whose two
+# geometries were identical. Duplicate value types break equality quietly, and the only
+# symptom is a field that is always wrong.
+Box = _Box
 
-    x0: int
-    y0: int
-    z0: int
-    x1: int
-    y1: int
-    z1: int
-
-    @property
-    def width(self) -> int:
-        return self.x1 - self.x0
-
-    @property
-    def height(self) -> int:
-        return self.y1 - self.y0
-
-    @property
-    def depth(self) -> int:
-        return self.z1 - self.z0
-
-    def as_tuple(self) -> tuple[int, ...]:
-        return (self.x0, self.y0, self.z0, self.x1, self.y1, self.z1)
-
-    def to_json(self) -> dict:
-        return {"min": [self.x0, self.y0, self.z0], "max": [self.x1, self.y1, self.z1]}
-
-
-FULL_BLOCK = Box(0, 0, 0, 16, 16, 16)
+FULL_BLOCK = _Box(0, 0, 0, 16, 16, 16)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -93,8 +73,18 @@ class Capabilities:
     def is_full_cube(self) -> bool:
         return self.full_footprint
 
+    def to_json(self) -> dict:
+        return {
+            "box_count": self.box_count,
+            "full_footprint": self.full_footprint,
+            "full_height": self.full_height,
+            "thin_axis": self.thin_axis,
+            "grounded": self.grounded,
+            "symmetric_y": self.symmetric_y,
+        }
 
-def boxes_from_geometry(geometry: Geometry) -> tuple[Box, ...]:
+
+def boxes_from_geometry(geometry: _MeasuredShape) -> tuple[Box, ...]:
     """The collision boxes a measured geometry implies.
 
     ``INHERITS`` resolves to a full block, because that is what a model with neither
