@@ -26,14 +26,23 @@ def _inside(point, box):
     return all(t[a] < point[a] < t[a + 3] for a in range(3))
 
 
+def _exact(boxes):
+    return [[Fraction(str(v)) for v in b.as_tuple()] for b in boxes]
+
+
+def _holds(point, t):
+    return all(t[a] < point[a] < t[a + 3] for a in range(3))
+
+
 def occupancy(given, merged):
     """(same space, merged is a partition, occupied volume of given, summed volume of merged)."""
     same, partition, occupied = True, True, Fraction(0)
+    exact_given, exact_merged = _exact(given), _exact(merged)
     for probe in _probes(given, merged):
         point = tuple(p for p, _ in probe)
         size = probe[0][1] * probe[1][1] * probe[2][1]
-        in_given = any(_inside(point, b) for b in given)
-        holders = sum(_inside(point, b) for b in merged)
+        in_given = any(_holds(point, t) for t in exact_given)
+        holders = sum(_holds(point, t) for t in exact_merged)
         same &= in_given == (holders > 0)
         partition &= holders <= 1
         occupied += size if in_given else 0
@@ -49,3 +58,9 @@ def assert_same_space(given, merged):
     assert same, f"merged boxes occupy different space: {given} -> {merged}"
     assert partition, f"merged boxes overlap: {merged}"
     assert summed == occupied, "a partition's summed volume must be the occupied volume"
+
+
+def assert_covers(given, cover):
+    """``cover`` occupies exactly the space ``given`` does. Overlap within ``cover`` is allowed."""
+    same, _, _, _ = occupancy([b for b in given if b.volume > 0], list(cover))
+    assert same, f"cover occupies different space: {given} -> {cover}"
