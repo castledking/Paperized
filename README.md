@@ -105,6 +105,10 @@ harder to explain, harder to secure and harder to maintain, for a capability a s
 covers. It stays a later phase, and only if a concrete need shows up that static analysis
 provably cannot meet.
 
+It does have a natural home when it arrives: Modrinth supports `java-agent` as a loader
+(under the `mod` project type), which is where Plugin ASM sits today. See
+[`docs/distribution.md`](docs/distribution.md).
+
 ---
 
 ## Status

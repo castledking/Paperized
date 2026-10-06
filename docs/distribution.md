@@ -6,41 +6,59 @@ who would use it.
 
 ---
 
-## Modrinth project types
+## Modrinth project types and loaders
 
-Verified against `GET /v2/tag/project_type`:
+Two independent axes, and conflating them produces wrong answers.
+
+**Project types** — `GET /v2/tag/project_type`:
 
 ```
 mod  modpack  resourcepack  shader  plugin  datapack  minecraft_java_server
 ```
 
-There is **no java-agent type**. Projects that are java agents are filed as `mod` — for
-example Plugin ASM, which is explicitly distributed as a java agent for runtime bytecode
-injection.
+**Loaders** — `GET /v2/tag/loader` — 29 of them, each declaring which project types it
+attaches to:
 
-That is a category error for Paperized anyway. A java agent is a `-javaagent:` jar attached
-to a JVM at startup to instrument classes. Paperized's static conversion reads a mod jar
-and writes a pack to disk. There is no JVM and nothing to instrument.
+```
+java-agent   ['mod']
+paper        ['plugin', 'mod']
+bukkit       ['plugin', 'mod']
+datapack     ['datapack', 'mod']
+fabric       ['mod', 'modpack']
+```
+
+**`java-agent` is a loader, not a project type.** It exists, it is supported, and it
+supports `mod` only — so a java agent is published as a **`mod`** carrying the
+`java-agent` loader. Plugin ASM is exactly that, and is correctly categorised.
+
+This matters for the runtime layer: `paperized analyze --agent minecraft` would be a `mod`
+project with the `java-agent` loader, discoverable alongside Plugin ASM. No new category
+would be needed.
+
+> Worth remembering when reading the API: asking `/tag/project_type` cannot tell you
+> whether a runtime-instrumentation distribution model is supported. It is not a type.
 
 ## What goes where
 
 | artefact | listing | rationale |
 |---|---|---|
-| **CMB Paperized** | `plugin` | What it is: a Paper plugin. Server admins browsing plugins find it here. |
+| **CMB Paperized** | `plugin`, loader `paper` | What it is: a Paper plugin. Server admins browsing plugins find it here. |
 | `paperized convert` (CLI) | **GitHub only** | A build tool for mod authors. Modrinth's plugin search is not where they look, and filing it as `plugin` misrepresents what it is. |
 | `paperized-core` / `-paper` | **Maven** | Libraries are consumed as dependencies, not downloaded from a content platform. |
+| `paperized analyze --agent` (later) | `mod`, loader `java-agent` | The one place instrumentation fits, and where Plugin ASM already sits. |
 | generated CraftEngine pack | not published | It is build output, specific to a target server's other packs. |
 
-## Why the toolkit is not a Modrinth plugin
+## Why the CLI is not a Modrinth project
 
-The audience is mod and pack authors. They arrive via GitHub, the CraftEngine Discord and
-other projects, not via Modrinth's plugin search. A listing there would add a maintenance
-surface — version tracking, changelogs, moderation — in exchange for very little reach.
+The audience for `paperized convert` is mod and pack authors. They arrive via GitHub, the
+CraftEngine Discord and other projects, not via Modrinth's plugin search. A listing there
+would add a maintenance surface — version tracking, changelogs, moderation — in exchange
+for very little reach.
 
-If it becomes worth publishing later, the honest listing is a `plugin` for the **runtime**
-layer (the thing that takes a mod jar and generates a pack on a running server), with the
-converter documented as what powers it. That is a different product from the CLI, and worth
-revisiting only once the runtime layer exists.
+The runtime layer is a different question, because it *is* something a server admin installs.
+`java-agent` being a real, supported loader means there is a natural home for it later
+(`mod` + loader `java-agent`, next to Plugin ASM). That is worth revisiting only once the
+runtime layer exists — a static converter has no business being attached to a JVM.
 
 ## Precedent
 
