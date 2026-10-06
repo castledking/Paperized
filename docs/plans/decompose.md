@@ -98,4 +98,4 @@ disclaims them; this inspects logic only.
 
 ## Next
 
-`Geometry -> BoxMerger -> minimal region set`. Still no collision, still no runtime.
+`Geometry -> BoxMerger -> region set`. Done; see [`merge.md`](merge.md).
